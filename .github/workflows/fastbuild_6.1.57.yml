@@ -1,24 +1,24 @@
-name: 6.1.57 SukiSU Ultra v3.2.0 + SuSFS v2.0 构建
+name: 6.1.57 欧加真OKI内核快速构建
 
 env:
   TZ: Asia/Shanghai
   ANDROID_VERSION: 'android14'
   KERNEL_VERSION: '6.1'
   SUB_VERSION: '57'
-  KERNEL_NAME: 'android14-11-o-gca13bff0bf09'
+  KERNEL_NAME: 'android14-11-o-gca13bffobf09'
   CCACHE_KEY: ccache-ecsv3-6.1.57
 
 on:
   workflow_dispatch:
     inputs:
       ksu_type:
-        description: 'KernelSU分支(ReSukiSU/SukiSU Ultra/KernelSU Next/KSU(原版)/无内置KSU,默认SukiSU Ultra)'
+        description: 'KernelSU分支(ReSukiSU/SukiSU Ultra/KernelSU Next/KSU(原版)/无内置KSU,默认ReSukiSU)'
         required: true
         type: choice
-        default: 'sukisu'
+        default: 'resukisu'
         options:
-          - 'sukisu'
           - 'resukisu'
+          - 'sukisu'
           - 'ksunext'
           - 'ksu'
           - 'none'
@@ -69,7 +69,7 @@ on:
         description: '是否启用三星SSG IO调度器支持(提升IO读写性能; 在一加12上可能导致bug)'
         required: true
         type: boolean
-        default: 'false'
+        default: 'true'
       rekernel_enable:
         description: '是否启用Re-Kernel支持(与Freezer/NoActive等软件配合, 提升应用冻结能力)'
         required: true
@@ -79,7 +79,7 @@ on:
         description: '是否开启内核级基带保护(阻止一切对非用户分区的写入，有效防止格机)'
         required: true
         type: boolean
-        default: 'false'
+        default: 'true'
       ccache_update:
         description: '更新ccache缓存(将本次编译生成的ccache缓存覆盖至仓库缓存，在更改编译配置、源码或需要刷新缓存时开启)'
         required: true
@@ -94,7 +94,7 @@ on:
         description: '内核后缀(留空默认,开头别加连字符,勿加空格等影响指令运行的保留字符)'
         required: false
         type: string
-        default: 'android14-11-o-gca13bff0bf09'
+        default: ''
 
 jobs:
   build:
@@ -250,25 +250,14 @@ jobs:
         run: |
           # 进入内核工作目录
           cd kernel_workspace
-          if [[ ${{ github.event.inputs.ksu_type }} == "sukisu" ]]; then
-            echo "正在配置 SukiSU Ultra v3.2.0..."
-            # 固定到 v3.2.0，避免 workflow 又拉到新版 ReSukiSU。
-            curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/v3.2.0/kernel/setup.sh" | bash -s v3.2.0
-            echo 'CONFIG_KSU_FULL_NAME_FORMAT="v3.2.0-%COMMIT_SHA%@RMX3888"' >> ./common/arch/arm64/configs/gki_defconfig
-            cd ./KernelSU
-            # 在 SukiSU 自己计算版本号之后覆盖，使管理器识别为 33000。
-            sed -i '/^ccflags-y += -DKSU_VERSION=/i KSU_VERSION := 33000' kernel/Makefile
-            grep -qx 'KSU_VERSION := 33000' kernel/Makefile
-            KSU_VERSION=33000
-            echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
-            echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
-          elif [[ ${{ github.event.inputs.ksu_type }} == "resukisu" ]]; then
-            echo "正在配置 ReSukiSU..."
+          if [[ ${{ github.event.inputs.ksu_type }} == "sukisu" || ${{ github.event.inputs.ksu_type }} == "resukisu" ]]; then
+            echo "正在配置ReSukiSU（由于SukiSU长期未维护无法正常编译，且ReSukiSU兼容sukisu管理器，故SukiSU源码仓库已重定向为resukisu）..."
             curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/refs/heads/main/kernel/setup.sh" | bash -s main
             echo 'CONFIG_KSU_FULL_NAME_FORMAT="%TAG_NAME%-%COMMIT_SHA%@cctv18"' >> ./common/arch/arm64/configs/gki_defconfig
             cd ./KernelSU
             # 生成自定义版本号（基于提交计数）, 失败时使用 114514
             KSU_VERSION=$(expr $(git rev-list --count main) + 30700 2>/dev/null || echo 114514)
+            # 存储版本号到 GitHub 环境变量
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
             echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
           elif [[ ${{ github.event.inputs.ksu_type }} == "ksunext" ]]; then
@@ -303,27 +292,12 @@ jobs:
         run: |
           cd kernel_workspace
           if [[ ${{ github.event.inputs.ksu_type }} != "none" ]]; then
-            echo "正在添加susfs补丁，固定到 SuSFS v2.0.0 最新修复版 e4298b2..."
-            git clone https://github.com/cctv18/susfs4oki.git susfs4ksu -b oki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}
-            cd susfs4ksu
-            git checkout e4298b2
-            echo "当前 SuSFS 版本："
-            grep -n 'SUSFS_VERSION' kernel_patches/include/linux/susfs.h
-            if ! grep -q 'SUSFS_VERSION "v2.0.0"' kernel_patches/include/linux/susfs.h; then
-              echo "::error::SuSFS 不是 v2.0.0，停止编译"
-              exit 1
-            fi
-            cd ..
+            echo "正在添加susfs补丁..."
+            git clone --depth=1 https://github.com/cctv18/susfs4oki.git susfs4ksu -b oki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}
             wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/69_hide_stuff.patch -O ./common/69_hide_stuff.patch
             cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch ./common/
             cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
             cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
-            echo "已复制到内核源码后的 SuSFS 版本："
-            grep -n 'SUSFS_VERSION' ./common/include/linux/susfs.h
-            if ! grep -q 'SUSFS_VERSION "v2.0.0"' ./common/include/linux/susfs.h; then
-              echo "::error::复制进内核源码后的 SuSFS 不是 v2.0.0，停止编译"
-              exit 1
-            fi
             cd ./common
             patch -p1 < 50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch || true
             patch -p1 -N -F 3 < 69_hide_stuff.patch || true
