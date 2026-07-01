@@ -1,4 +1,4 @@
-name: 6.1.57 欧加真OKI内核快速构建
+name: 6.1.57 SukiSU Ultra v3.2.0 + SuSFS v2.0 构建
 
 env:
   TZ: Asia/Shanghai
@@ -12,13 +12,13 @@ on:
   workflow_dispatch:
     inputs:
       ksu_type:
-        description: 'KernelSU分支(ReSukiSU/SukiSU Ultra/KernelSU Next/KSU(原版)/无内置KSU,默认ReSukiSU)'
+        description: 'KernelSU分支(ReSukiSU/SukiSU Ultra/KernelSU Next/KSU(原版)/无内置KSU,默认SukiSU Ultra)'
         required: true
         type: choice
-        default: 'resukisu'
+        default: 'sukisu'
         options:
-          - 'resukisu'
           - 'sukisu'
+          - 'resukisu'
           - 'ksunext'
           - 'ksu'
           - 'none'
@@ -250,14 +250,25 @@ jobs:
         run: |
           # 进入内核工作目录
           cd kernel_workspace
-          if [[ ${{ github.event.inputs.ksu_type }} == "sukisu" || ${{ github.event.inputs.ksu_type }} == "resukisu" ]]; then
-            echo "正在配置ReSukiSU（由于SukiSU长期未维护无法正常编译，且ReSukiSU兼容sukisu管理器，故SukiSU源码仓库已重定向为resukisu）..."
+          if [[ ${{ github.event.inputs.ksu_type }} == "sukisu" ]]; then
+            echo "正在配置 SukiSU Ultra v3.2.0..."
+            # 固定到 v3.2.0，避免 workflow 又拉到新版 ReSukiSU。
+            curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/v3.2.0/kernel/setup.sh" | bash -s v3.2.0
+            echo 'CONFIG_KSU_FULL_NAME_FORMAT="v3.2.0-%COMMIT_SHA%@RMX3888"' >> ./common/arch/arm64/configs/gki_defconfig
+            cd ./KernelSU
+            # 在 SukiSU 自己计算版本号之后覆盖，使管理器识别为 33000。
+            sed -i '/^ccflags-y += -DKSU_VERSION=/i KSU_VERSION := 33000' kernel/Makefile
+            grep -qx 'KSU_VERSION := 33000' kernel/Makefile
+            KSU_VERSION=33000
+            echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+            echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
+          elif [[ ${{ github.event.inputs.ksu_type }} == "resukisu" ]]; then
+            echo "正在配置 ReSukiSU..."
             curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/refs/heads/main/kernel/setup.sh" | bash -s main
             echo 'CONFIG_KSU_FULL_NAME_FORMAT="%TAG_NAME%-%COMMIT_SHA%@cctv18"' >> ./common/arch/arm64/configs/gki_defconfig
             cd ./KernelSU
             # 生成自定义版本号（基于提交计数）, 失败时使用 114514
             KSU_VERSION=$(expr $(git rev-list --count main) + 30700 2>/dev/null || echo 114514)
-            # 存储版本号到 GitHub 环境变量
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
             echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
           elif [[ ${{ github.event.inputs.ksu_type }} == "ksunext" ]]; then
