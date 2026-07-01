@@ -5,7 +5,7 @@ env:
   ANDROID_VERSION: 'android14'
   KERNEL_VERSION: '6.1'
   SUB_VERSION: '57'
-  KERNEL_NAME: 'android14-11-o-gca13bffobf09'
+  KERNEL_NAME: 'android14-11-o-gca13bff0bf09'
   CCACHE_KEY: ccache-ecsv3-6.1.57
 
 on:
@@ -69,7 +69,7 @@ on:
         description: '是否启用三星SSG IO调度器支持(提升IO读写性能; 在一加12上可能导致bug)'
         required: true
         type: boolean
-        default: 'true'
+        default: 'false'
       rekernel_enable:
         description: '是否启用Re-Kernel支持(与Freezer/NoActive等软件配合, 提升应用冻结能力)'
         required: true
@@ -79,7 +79,7 @@ on:
         description: '是否开启内核级基带保护(阻止一切对非用户分区的写入，有效防止格机)'
         required: true
         type: boolean
-        default: 'true'
+        default: 'false'
       ccache_update:
         description: '更新ccache缓存(将本次编译生成的ccache缓存覆盖至仓库缓存，在更改编译配置、源码或需要刷新缓存时开启)'
         required: true
@@ -94,7 +94,7 @@ on:
         description: '内核后缀(留空默认,开头别加连字符,勿加空格等影响指令运行的保留字符)'
         required: false
         type: string
-        default: ''
+        default: 'android14-11-o-gca13bff0bf09'
 
 jobs:
   build:
@@ -251,12 +251,29 @@ jobs:
           # 进入内核工作目录
           cd kernel_workspace
           if [[ ${{ github.event.inputs.ksu_type }} == "sukisu" || ${{ github.event.inputs.ksu_type }} == "resukisu" ]]; then
-            echo "正在配置ReSukiSU（由于SukiSU长期未维护无法正常编译，且ReSukiSU兼容sukisu管理器，故SukiSU源码仓库已重定向为resukisu）..."
-            curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/refs/heads/main/kernel/setup.sh" | bash -s main
+            echo "正在配置 SukiSU Ultra v3.2.0（比 v3.1.7 更新，但不直接上 4.x，尽量兼顾新版管理器与 SuSFS v2.0.0）..."
+            curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/v3.2.0/kernel/setup.sh" | bash -s v3.2.0
             echo 'CONFIG_KSU_FULL_NAME_FORMAT="%TAG_NAME%-%COMMIT_SHA%@cctv18"' >> ./common/arch/arm64/configs/gki_defconfig
             cd ./KernelSU
-            # 生成自定义版本号（基于提交计数）, 失败时使用 114514
-            KSU_VERSION=$(expr $(git rev-list --count main) + 30700 2>/dev/null || echo 114514)
+            echo "强制修正内核 KSU_VERSION 为 33000，避免管理器提示 14334/32310/32311 过低..."
+            # 不能只改变量，v3.2.0 的 Makefile 会在编译时重新计算成 14334。
+            # 这里在 Makefile 末尾追加最终覆盖规则：先 -U 取消旧宏，再 -D 强制新版号。
+            cat >> kernel/Makefile <<'EOF_KSU_FORCE'
+
+# ---- FORCE_KSU_VERSION_BY_CHATGPT_FOR_RMX3888 ----
+override KSU_VERSION := 33000
+override KSU_VERSION_FULL := v3.2.0-k33000-rmx3888@force
+ccflags-y += -UKSU_VERSION -DKSU_VERSION=33000
+ccflags-y += -UKSU_VERSION_FULL -DKSU_VERSION_FULL=\"v3.2.0-k33000-rmx3888@force\"
+# ---- FORCE_KSU_VERSION_BY_CHATGPT_FOR_RMX3888_END ----
+EOF_KSU_FORCE
+
+            echo "---- 已强制追加 KSU_VERSION 覆盖规则，确认如下 ----"
+            grep -n -A8 -B2 'FORCE_KSU_VERSION_BY_CHATGPT_FOR_RMX3888' kernel/Makefile || true
+            grep -n 'KSU_VERSION' kernel/Makefile | tail -n 20 || true
+            # 生成自定义版本号
+            # 强制把内核上报的 KSU 版本设到新版管理器要求线以上，避免 14334/32310/32311 被新版管理器判定过低
+            KSU_VERSION=33000
             # 存储版本号到 GitHub 环境变量
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
             echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
@@ -292,12 +309,27 @@ jobs:
         run: |
           cd kernel_workspace
           if [[ ${{ github.event.inputs.ksu_type }} != "none" ]]; then
-            echo "正在添加susfs补丁..."
-            git clone --depth=1 https://github.com/cctv18/susfs4oki.git susfs4ksu -b oki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}
+            echo "正在添加susfs补丁，固定到 SuSFS v2.0.0 最新修复版 e4298b2..."
+            git clone https://github.com/cctv18/susfs4oki.git susfs4ksu -b oki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}
+            cd susfs4ksu
+            git checkout e4298b2
+            echo "当前 SuSFS 版本："
+            grep -n 'SUSFS_VERSION' kernel_patches/include/linux/susfs.h
+            if ! grep -q 'SUSFS_VERSION "v2.0.0"' kernel_patches/include/linux/susfs.h; then
+              echo "::error::SuSFS 不是 v2.0.0，停止编译"
+              exit 1
+            fi
+            cd ..
             wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/69_hide_stuff.patch -O ./common/69_hide_stuff.patch
             cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch ./common/
             cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
             cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
+            echo "已复制到内核源码后的 SuSFS 版本："
+            grep -n 'SUSFS_VERSION' ./common/include/linux/susfs.h
+            if ! grep -q 'SUSFS_VERSION "v2.0.0"' ./common/include/linux/susfs.h; then
+              echo "::error::复制进内核源码后的 SuSFS 不是 v2.0.0，停止编译"
+              exit 1
+            fi
             cd ./common
             patch -p1 < 50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch || true
             patch -p1 -N -F 3 < 69_hide_stuff.patch || true
@@ -619,8 +651,13 @@ jobs:
           sudo rm -rf /usr/local/lib/android &
           sudo rm -rf /opt/ghc &
           sudo rm -rf /opt/hostedtoolcache/CodeQL &
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig &&
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error Image
+          echo "---- 编译前最终确认 KernelSU Makefile 强制版本 ----"
+          grep -n -A8 -B2 'FORCE_KSU_VERSION_BY_CHATGPT_FOR_RMX3888' drivers/kernelsu/Makefile || true
+          grep -n 'KSU_VERSION' drivers/kernelsu/Makefile | tail -n 20 || true
+
+          set -o pipefail
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig 2>&1 | tee build-gki_defconfig.log
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error Image 2>&1 | tee build-image.log
           
           # 编译后时间劫持二次校验
           echo "--- 编译后环境时间: $(LD_PRELOAD=$PRELOAD_LIBS date) ---"
@@ -631,6 +668,18 @@ jobs:
           ccache -s
           echo "编译后空间:"
           df -h
+
+      - name: 上传失败日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-failure-logs
+          path: |
+            kernel_workspace/common/build-gki_defconfig.log
+            kernel_workspace/common/build-image.log
+            kernel_workspace/common/out/.config
+            kernel_workspace/common/out/include/generated/autoconf.h
+          if-no-files-found: ignore
 
       - name: 保存新的 ccache 缓存
         if: inputs.ccache_update || steps.ccache-restore.outputs.cache-hit != 'true'
