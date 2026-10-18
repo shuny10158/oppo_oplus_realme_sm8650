@@ -1,4 +1,4 @@
-name: GT5 Pro 6.1.57 ReSukiSU SUSFS 标识统一版
+name: GT5 Pro 6.1.57 ReSukiSU SUSFS 稳定修复版
 
 env:
   TZ: Asia/Shanghai
@@ -252,11 +252,18 @@ jobs:
           cd kernel_workspace
           if [[ ${{ github.event.inputs.ksu_type }} == "sukisu" || ${{ github.event.inputs.ksu_type }} == "resukisu" ]]; then
             echo "正在配置ReSukiSU（由于SukiSU长期未维护无法正常编译，且ReSukiSU兼容sukisu管理器，故SukiSU源码仓库已重定向为resukisu）..."
-            curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/refs/heads/main/kernel/setup.sh" | bash -s main
+            curl -fLSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/239e1e88/kernel/setup.sh" | bash -s 239e1e88
             echo 'CONFIG_KSU_FULL_NAME_FORMAT="%TAG_NAME%-%COMMIT_SHA%@cctv18"' >> ./common/arch/arm64/configs/gki_defconfig
             cd ./KernelSU
-            # 生成自定义版本号（基于提交计数）, 失败时使用 114514
-            KSU_VERSION=$(expr $(git rev-list --count main) + 30700 2>/dev/null || echo 114514)
+            # 核对提交号：如果上游 setup.sh 未正确固定版本，立即停止
+            ACTUAL_KSU_COMMIT="$(git rev-parse --short=8 HEAD)"
+            echo "KernelSU 提交号：$ACTUAL_KSU_COMMIT"
+            if [[ "$ACTUAL_KSU_COMMIT" != "239e1e88" ]]; then
+              echo "::error::KernelSU 提交号不匹配：需要 239e1e88，实际为 $ACTUAL_KSU_COMMIT"
+              exit 1
+            fi
+            # 按已固定的 HEAD 计算版本号，避免 main 后续更新改变它
+            KSU_VERSION=$(expr $(git rev-list --count HEAD) + 30700 2>/dev/null || echo 114514)
             # 存储版本号到 GitHub 环境变量
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
             echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
